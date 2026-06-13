@@ -1,9 +1,28 @@
 @import "tailwindcss";
 
 @theme {
-  --font-japanese: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
-  --font-sans: Inter, system-ui, -apple-system, sans-serif;
-  
-  --min-height-touch: 44px;
-  --min-width-touch: 44px;
+  --font-japanese: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho",
+    "MS Mincho", serif;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --color-primary: #6366f1;
+  --color-primary-dark: #4f46e5;
+}
+
+/* Minimum 44px touch targets everywhere */
+button,
+a,
+[role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Japanese text rendering */
+.font-japanese {
+  font-family: var(--font-japanese);
+  font-feature-settings: "palt";
+}
+
+/* Safe area insets for mobile notches */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
 }
