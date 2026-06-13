@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 node_modules/
 dist/
+.env.production
+.env.local
+.env.*.local
