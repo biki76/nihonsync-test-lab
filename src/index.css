@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@theme {
+  --font-japanese: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
+  --font-sans: Inter, system-ui, -apple-system, sans-serif;
+  
+  --min-height-touch: 44px;
+  --min-width-touch: 44px;
+}
