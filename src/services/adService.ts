@@ -13,32 +13,17 @@
 
 import type { AdOutcome } from '../types'
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Hard cap on ad display time in ms (PRD §14.1) */
 const AD_TIMEOUT_MS = 4_000
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-/**
- * Attempt to show an Adsterra interstitial ad.
- *
- * Always resolves — never rejects. The returned AdOutcome tells the caller
- * what happened, but the caller MUST navigate to results regardless of outcome.
- *
- * @returns Promise<AdOutcome> — 'completed' | 'skipped' | 'timeout' | 'error'
- */
 export async function showInterstitial(): Promise<AdOutcome> {
   const zoneId = import.meta.env.VITE_ADSTERRA_ZONE_ID
 
-  // If no zone ID is configured (e.g. development), skip silently
   if (!zoneId) {
     console.info('[adService] No VITE_ADSTERRA_ZONE_ID set — skipping ad.')
     return 'skipped'
   }
 
   return new Promise<AdOutcome>((resolve) => {
-    // Hard timeout — fires unconditionally after AD_TIMEOUT_MS
     const timeout = setTimeout(() => {
       console.warn('[adService] Ad timed out after', AD_TIMEOUT_MS, 'ms')
       resolve('timeout')
@@ -52,4 +37,65 @@ export async function showInterstitial(): Promise<AdOutcome> {
     try {
       loadAdsterraScript(zoneId, {
         onCompleted: () => safeResolve('completed'),
-        onSkipped: () =>
+        onSkipped: () => safeResolve('skipped'),
+        onError: () => safeResolve('error'),
+      })
+    } catch (err) {
+      console.error('[adService] Failed to load ad script:', err)
+      safeResolve('error')
+    }
+  })
+}
+
+interface AdsterraCallbacks {
+  onCompleted: () => void
+  onSkipped: () => void
+  onError: () => void
+}
+
+function loadAdsterraScript(
+  zoneId: string,
+  callbacks: AdsterraCallbacks,
+): void {
+  const existingScript = document.getElementById('adsterra-interstitial')
+  if (existingScript) {
+    existingScript.remove()
+  }
+
+  const script = document.createElement('script')
+  script.id = 'adsterra-interstitial'
+  script.async = true
+  script.src = `https://www.highperformanceformat.com/${zoneId}/invoke.js`
+
+  script.onload = () => {
+    try {
+      const adsterra = (window as unknown as Record<string, unknown>)['adsterra']
+
+      if (typeof adsterra === 'object' && adsterra !== null) {
+        const ctrl = adsterra as Record<string, unknown>
+
+        if (typeof ctrl['show'] === 'function') {
+          ;(ctrl['show'] as (opts: Record<string, unknown>) => void)({
+            onComplete: callbacks.onCompleted,
+            onSkip: callbacks.onSkipped,
+            onError: callbacks.onError,
+          })
+        } else {
+          callbacks.onCompleted()
+        }
+      } else {
+        callbacks.onCompleted()
+      }
+    } catch (err) {
+      console.error('[adService] Error invoking Adsterra show():', err)
+      callbacks.onError()
+    }
+  }
+
+  script.onerror = () => {
+    console.error('[adService] Adsterra script failed to load')
+    callbacks.onError()
+  }
+
+  document.head.appendChild(script)
+}

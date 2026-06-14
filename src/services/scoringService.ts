@@ -1,13 +1,13 @@
 // src/services/scoringService.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Submits completed exam answers to the Supabase Edge Function for
-// server-authoritative scoring.
+// server-authoritative scoring, then fetches the result from exam_results.
 //
 // SECURITY CONTRACT:
 //   - Answers are sent TO the server; correct answers NEVER come back
-//     in a form the client can use to cheat.
+//     in a form the client can use to cheat during the exam.
 //   - The Edge Function uses the service role key (server-only) to read
-//     correct_answer from the DB. This service uses only the anon key.
+//     correct_answer_id from the DB. This service uses only the anon key.
 //   - This file must NEVER import answer data or perform any local
 //     comparison of user answers against correct answers.
 //
@@ -17,38 +17,21 @@
 import { supabase } from './supabaseClient'
 import type { ScoringRequest, ScoringResult, ServiceResult } from '../types'
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Timeout in ms for the scoring Edge Function call (ARCHITECTURE.md §11.3) */
 const SCORING_TIMEOUT_MS = 15_000
 
-// ── Scoring ───────────────────────────────────────────────────────────────────
-
-/**
- * Submit a completed exam to the Edge Function for server-side scoring.
- *
- * Implements a hard timeout so the UI never hangs indefinitely.
- * On timeout or network failure, returns a typed error — the caller
- * is responsible for showing a retry UI.
- *
- * @param request - The session ID, set ID, and array of user answers
- * @returns A ServiceResult containing the full ScoringResult on success
- */
 export async function submitForScoring(
   request: ScoringRequest,
 ): Promise<ServiceResult<ScoringResult>> {
-  // Validate before sending — catch obvious client bugs early
   if (!request.session_id) {
     return { success: false, error: 'Invalid session: missing session ID.' }
   }
   if (!request.set_id) {
     return { success: false, error: 'Invalid session: missing set ID.' }
   }
-  if (!request.answers || request.answers.length === 0) {
+  if (!request.answers || Object.keys(request.answers).length === 0) {
     return { success: false, error: 'No answers to submit.' }
   }
 
-  // Race the Edge Function call against a hard timeout
   try {
     const result = await Promise.race([
       callScoringFunction(request),
@@ -76,64 +59,59 @@ export async function submitForScoring(
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/**
- * Invokes the Supabase Edge Function at /functions/v1/score
- * The function name 'score' matches supabase/functions/score/index.ts
- */
 async function callScoringFunction(
   request: ScoringRequest,
 ): Promise<ServiceResult<ScoringResult>> {
-  const { data, error } = await supabase.functions.invoke<ScoringResult>('score', {
+  // Step 1: invoke the Edge Function to perform server-side scoring
+  const { error: invokeError } = await supabase.functions.invoke('score', {
     body: request,
   })
 
-  if (error) {
-    console.error('[scoringService] Edge Function error:', error.message)
+  if (invokeError) {
+    console.error('[scoringService] Edge Function error:', invokeError.message)
 
-    // Distinguish between network errors and application-level rejections
     const isNetworkError =
-      error.message.toLowerCase().includes('fetch') ||
-      error.message.toLowerCase().includes('network')
+      invokeError.message.toLowerCase().includes('fetch') ||
+      invokeError.message.toLowerCase().includes('network')
 
     return {
       success: false,
       error: isNetworkError
         ? 'Network error — please check your connection and try again.'
-        : `Scoring failed: ${error.message}`,
+        : `Scoring failed: ${invokeError.message}`,
     }
   }
 
-  if (!data) {
+  // Step 2: fetch the resulting row from exam_results by session_id
+  const { data, error: fetchError } = await supabase
+    .from('exam_results')
+    .select('session_id, score, total, percentage, performance_band, section_breakdown, question_results, calculated_at')
+    .eq('session_id', request.session_id)
+    .single()
+
+  if (fetchError || !data) {
+    console.error('[scoringService] Failed to fetch exam_results:', fetchError?.message)
     return {
       success: false,
-      error: 'Scoring returned an empty response. Please try again.',
+      error: 'Scoring completed but results could not be retrieved. Please try again.',
     }
   }
 
-  // Validate the response shape before trusting it
   const validated = validateScoringResult(data)
   if (!validated.success) {
     console.error('[scoringService] Invalid scoring response shape:', data)
     return validated
   }
 
-  return { success: true, data }
+  return { success: true, data: data as ScoringResult }
 }
 
-/**
- * Returns a promise that rejects after `ms` milliseconds.
- * Used with Promise.race to implement a hard timeout.
- */
 function timeoutRejection(ms: number): Promise<never> {
   return new Promise((_, reject) =>
     setTimeout(() => reject(new Error('SCORING_TIMEOUT')), ms),
   )
 }
 
-/**
- * Runtime validation of the ScoringResult shape.
- * Guards against malformed Edge Function responses.
- */
 function validateScoringResult(
   data: unknown,
 ): ServiceResult<ScoringResult> {
@@ -155,11 +133,8 @@ function validateScoringResult(
   if (typeof d.percentage !== 'number') {
     return { success: false, error: 'Scoring response missing percentage.' }
   }
-  if (typeof d.passed !== 'boolean') {
-    return { success: false, error: 'Scoring response missing passed flag.' }
-  }
-  if (!Array.isArray(d.scored_questions)) {
-    return { success: false, error: 'Scoring response missing scored_questions.' }
+  if (!Array.isArray(d.question_results)) {
+    return { success: false, error: 'Scoring response missing question_results.' }
   }
 
   return { success: true, data: data as ScoringResult }
@@ -167,13 +142,6 @@ function validateScoringResult(
 
 // ── Keep-warm ping ────────────────────────────────────────────────────────────
 
-/**
- * Pings the Edge Function keep-warm endpoint.
- * Called every 4 minutes during an active exam to avoid cold-start latency.
- * (ARCHITECTURE.md §11.3)
- *
- * Silently swallows all errors — a failed ping has no user-visible effect.
- */
 export async function pingEdgeFunction(): Promise<void> {
   try {
     await supabase.functions.invoke('score/ping', { method: 'GET' } as never)

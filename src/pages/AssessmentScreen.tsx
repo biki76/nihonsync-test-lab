@@ -14,18 +14,9 @@ import {
 } from 'lucide-react'
 import { useExamSession } from '../hooks/useExamSession'
 import { fetchQuestionSetById } from '../services/questionService'
-import type { AnswerOption, Question } from '../types'
+import type { Question } from '../types'
 
-// ── Option labels ─────────────────────────────────────────────────────────────
-
-const OPTION_LABELS: Record<AnswerOption, string> = {
-  1: 'A',
-  2: 'B',
-  3: 'C',
-  4: 'D',
-}
-
-// ── Screen ────────────────────────────────────────────────────────────────────
+const OPTION_LABELS = ['A', 'B', 'C', 'D'] as const
 
 export default function AssessmentScreen() {
   const { setId } = useParams<{ setId: string }>()
@@ -57,15 +48,10 @@ export default function AssessmentScreen() {
       return
     }
 
-    // If a session is already active for this set, resume it
-    if (
-      session.status === 'active' &&
-      session.set_id === setId
-    ) {
+    if (session.status === 'active' && session.set_id === setId) {
       return
     }
 
-    // Otherwise start fresh
     async function init() {
       if (!setId) return
       const result = await fetchQuestionSetById(setId)
@@ -92,7 +78,6 @@ export default function AssessmentScreen() {
 
   const handleSubmit = async () => {
     await submitExam()
-    // Navigation handled by the useEffect above once status === 'complete'
   }
 
   // ── Abandon exam ───────────────────────────────────────────────────────────
@@ -167,7 +152,9 @@ export default function AssessmentScreen() {
   // ── Active exam UI ─────────────────────────────────────────────────────────
 
   const questionNumber = session.current_question_index + 1
-  const progressPercent = Math.round((answeredCount / totalQuestions) * 100)
+  const progressPercent =
+    totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0
+  const remaining = totalQuestions - answeredCount
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col">
@@ -193,7 +180,6 @@ export default function AssessmentScreen() {
           </p>
         </div>
 
-        {/* Answered count */}
         <div className="text-right">
           <p className="text-indigo-400 font-semibold text-sm">
             {answeredCount}/{totalQuestions}
@@ -220,18 +206,17 @@ export default function AssessmentScreen() {
 
           {/* ── Answer options ────────────────────────────────────────────── */}
           <div className="flex flex-col gap-3">
-            {([1, 2, 3, 4] as AnswerOption[]).map((optionNum) => {
-              const text = getOptionText(currentQuestion, optionNum)
-              const isSelected = currentAnswer === optionNum
+            {currentQuestion.options.map((option, index) => {
+              const isSelected = currentAnswer === option.id
 
               return (
                 <AnswerButton
-                  key={optionNum}
-                  label={OPTION_LABELS[optionNum]}
-                  text={text}
+                  key={option.id}
+                  label={OPTION_LABELS[index] ?? String(index + 1)}
+                  text={option.text}
                   selected={isSelected}
                   onSelect={() =>
-                    answerQuestion(currentQuestion.id, optionNum)
+                    answerQuestion(currentQuestion.id, option.id)
                   }
                 />
               )
@@ -245,7 +230,6 @@ export default function AssessmentScreen() {
       <nav className="px-4 pb-8 pt-2 sm:px-6 safe-bottom">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
 
-          {/* Prev */}
           <button
             onClick={prevQuestion}
             disabled={session.current_question_index === 0}
@@ -257,7 +241,6 @@ export default function AssessmentScreen() {
             <ChevronLeft className="w-5 h-5" />
           </button>
 
-          {/* Submit or Next */}
           {isLastQuestion ? (
             <button
               onClick={handleSubmit}
@@ -272,7 +255,7 @@ export default function AssessmentScreen() {
               <Send className="w-4 h-4" />
               {allAnswered
                 ? 'Submit exam'
-                : `Answer all questions (${totalQuestions - answeredCount} left)`}
+                : `Answer all questions (${remaining} left)`}
             </button>
           ) : (
             <button
@@ -298,18 +281,23 @@ export default function AssessmentScreen() {
 // ── QuestionCard ──────────────────────────────────────────────────────────────
 
 function QuestionCard({ question }: { question: Question }) {
+  const parts = question.target_word
+    ? question.japanese_text.split(question.target_word)
+    : [question.japanese_text]
+
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 sm:p-6">
-      <p className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-3">
-        Choose the correct reading
-      </p>
+      {question.question_text && (
+        <p className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-3">
+          {question.question_text}
+        </p>
+      )}
 
-      {/* Japanese sentence */}
       <p className="font-japanese text-xl sm:text-2xl text-white leading-relaxed">
-        {question.sentence.split(question.target_word).map((part, i, arr) => (
+        {parts.map((part: string, i: number) => (
           <span key={i}>
             {part}
-            {i < arr.length - 1 && (
+            {i < parts.length - 1 && (
               <span className="text-indigo-400 border-b-2 border-indigo-400 pb-0.5">
                 {question.target_word}
               </span>
@@ -354,16 +342,4 @@ function AnswerButton({ label, text, selected, onSelect }: AnswerButtonProps) {
       <span className="font-japanese text-base">{text}</span>
     </button>
   )
-}
-
-// ── Helper ────────────────────────────────────────────────────────────────────
-
-function getOptionText(question: Question, option: AnswerOption): string {
-  const map: Record<AnswerOption, keyof Question> = {
-    1: 'option_a',
-    2: 'option_b',
-    3: 'option_c',
-    4: 'option_d',
-  }
-  return question[map[option]] as string
 }
